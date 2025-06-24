@@ -161,46 +161,50 @@ class ApparentTemperatureSensor(SensorEntity):
         entities = set()
         for entity_id in self._sources:
             state: State = self.hass.states.get(entity_id)
+            if not state:
+                continue
+
             domain = split_entity_id(state.entity_id)[0]
             device_class = state.attributes.get(ATTR_DEVICE_CLASS)
-            unit_of_measurement = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            unit_of_measurement = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT, "").lower()
 
             if domain == WEATHER_DOMAIN:
+                self._temp = self._humd = self._wind = entity_id
+                entities.add(entity_id)
+                continue
+
+            if domain == CLIMATE_DOMAIN:
+                self._temp = self._humd = entity_id
+                entities.add(entity_id)
+                continue
+
+            if device_class == SensorDeviceClass.TEMPERATURE or "temperature" in unit_of_measurement:
                 self._temp = entity_id
+                entities.add(entity_id)
+                continue
+
+            if device_class == SensorDeviceClass.HUMIDITY or "humidity" in unit_of_measurement or unit_of_measurement == PERCENTAGE:
                 self._humd = entity_id
+                entities.add(entity_id)
+                continue
+
+            if "wind" in entity_id or "speed" in unit_of_measurement:
                 self._wind = entity_id
                 entities.add(entity_id)
-            elif domain == CLIMATE_DOMAIN:
-                self._temp = entity_id
-                self._humd = entity_id
-                entities.add(entity_id)
-            elif (
-                device_class == SensorDeviceClass.TEMPERATURE
-                or unit_of_measurement in UnitOfTemperature
-            ):
+                continue
+
+            if "temperature" in entity_id:
                 self._temp = entity_id
                 entities.add(entity_id)
-            elif (
-                device_class == SensorDeviceClass.HUMIDITY
-                or unit_of_measurement == PERCENTAGE
-            ):
+                continue
+
+            if "humidity" in entity_id:
                 self._humd = entity_id
                 entities.add(entity_id)
-            elif unit_of_measurement in UnitOfSpeed:
-                self._wind = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("temperature") >= 0:
-                self._temp = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("humidity") >= 0:
-                self._humd = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("wind") >= 0:
-                self._wind = entity_id
-                entities.add(entity_id)
+                continue
 
         return list(entities)
-
+        
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
 
