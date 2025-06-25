@@ -9,8 +9,6 @@ import voluptuous as vol
 from homeassistant.components.climate import (
     ATTR_CURRENT_HUMIDITY,
     ATTR_CURRENT_TEMPERATURE,
-)
-from homeassistant.components.climate import (
     DOMAIN as CLIMATE_DOMAIN,
 )
 from homeassistant.components.group import expand_entity_ids
@@ -25,8 +23,6 @@ from homeassistant.components.weather import (
     ATTR_WEATHER_TEMPERATURE_UNIT,
     ATTR_WEATHER_WIND_SPEED,
     ATTR_WEATHER_WIND_SPEED_UNIT,
-)
-from homeassistant.components.weather import (
     DOMAIN as WEATHER_DOMAIN,
 )
 from homeassistant.const import (
@@ -42,13 +38,7 @@ from homeassistant.const import (
     UnitOfSpeed,
     UnitOfTemperature,
 )
-from homeassistant.core import (
-    Event,
-    HomeAssistant,
-    State,
-    callback,
-    split_entity_id,
-)
+from homeassistant.core import Event, HomeAssistant, State, callback, split_entity_id
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -76,15 +66,13 @@ PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
 )
 
 
-# pylint: disable=unused-argument
 async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,  # noqa: ARG001
+    discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the Car Wash sensor."""
-    # Print startup message
+    """Set up the Apparent Temperature sensor platform."""
     _LOGGER.info(STARTUP_MESSAGE)
 
     async_add_entities(
@@ -112,10 +100,8 @@ class ApparentTemperatureSensor(SensorEntity):
     def __init__(
         self, unique_id: str | None, name: str | None, sources: list[str]
     ) -> None:
-        """Class initialization."""
         self._attr_unique_id = unique_id
         self._attr_native_value = None
-
         self._name = name
         self._sources = sources
 
@@ -126,9 +112,14 @@ class ApparentTemperatureSensor(SensorEntity):
         self._humd_val = None
         self._wind_val = None
 
+    @property
+    def name(self) -> str | UndefinedType | None:
+        if self._name:
+            return self._name
+        return self._compose_name(split_entity_id(self._sources[0])[1])
+
     @staticmethod
     def _compose_name(source_name: str) -> str:
-        """Compose entity name based on source entity name."""
         tpos = source_name.rfind("temperature")
         return (
             source_name + " Apparent Temperature"
@@ -137,16 +128,7 @@ class ApparentTemperatureSensor(SensorEntity):
         )
 
     @property
-    def name(self) -> str | UndefinedType | None:
-        """Return the name of the sensor."""
-        if self._name:
-            return self._name
-
-        return self._compose_name(split_entity_id(self._sources[0])[1])
-
-    @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        """Return entity specific state attributes."""
         return {
             ATTR_TEMPERATURE_SOURCE: self._temp,
             ATTR_TEMPERATURE_SOURCE_VALUE: self._temp_val,
@@ -157,76 +139,76 @@ class ApparentTemperatureSensor(SensorEntity):
         }
 
     def _setup_sources(self) -> list[str]:
-        """Set sources for entity and return list of sources to track."""
-        entities = set()
+        """Select best-matching sources from given list."""
+        found = {
+            "temp": None,
+            "humd": None,
+            "wind": None,
+        }
+
         for entity_id in self._sources:
             state: State = self.hass.states.get(entity_id)
-            domain = split_entity_id(state.entity_id)[0]
-            device_class = state.attributes.get(ATTR_DEVICE_CLASS)
-            unit_of_measurement = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            if state is None:
+                continue
 
+            domain = split_entity_id(entity_id)[0]
+            attrs = state.attributes
+            unit = attrs.get(ATTR_UNIT_OF_MEASUREMENT)
+            device_class = attrs.get(ATTR_DEVICE_CLASS)
+
+            # Handle weather entity (can supply all three)
             if domain == WEATHER_DOMAIN:
-                self._temp = entity_id
-                self._humd = entity_id
-                self._wind = entity_id
-                entities.add(entity_id)
-            elif domain == CLIMATE_DOMAIN:
-                self._temp = entity_id
-                self._humd = entity_id
-                entities.add(entity_id)
-            elif (
-                device_class == SensorDeviceClass.TEMPERATURE
-                or unit_of_measurement in UnitOfTemperature
-            ):
-                self._temp = entity_id
-                entities.add(entity_id)
-            elif (
-                device_class == SensorDeviceClass.HUMIDITY
-                or unit_of_measurement == PERCENTAGE
-            ):
-                self._humd = entity_id
-                entities.add(entity_id)
-            elif unit_of_measurement in UnitOfSpeed:
-                self._wind = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("temperature") >= 0:
-                self._temp = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("humidity") >= 0:
-                self._humd = entity_id
-                entities.add(entity_id)
-            elif entity_id.find("wind") >= 0:
-                self._wind = entity_id
-                entities.add(entity_id)
+                if not found["temp"]:
+                    found["temp"] = entity_id
+                if not found["humd"]:
+                    found["humd"] = entity_id
+                if not found["wind"]:
+                    found["wind"] = entity_id
+                continue
 
-        return list(entities)
+            # Temperature preference
+            if not found["temp"] and (
+                device_class == SensorDeviceClass.TEMPERATURE
+                or unit in UnitOfTemperature
+                or "temperature" in entity_id.lower()
+            ):
+                found["temp"] = entity_id
+
+            # Humidity preference
+            if not found["humd"] and (
+                device_class == SensorDeviceClass.HUMIDITY
+                or unit == PERCENTAGE
+                or "humidity" in entity_id.lower()
+            ):
+                found["humd"] = entity_id
+
+            # Wind speed preference
+            if not found["wind"] and (
+                unit in UnitOfSpeed or "wind" in entity_id.lower()
+            ):
+                found["wind"] = entity_id
+
+        self._temp = found["temp"]
+        self._humd = found["humd"]
+        self._wind = found["wind"]
+        return [s for s in [self._temp, self._humd, self._wind] if s]
 
     async def async_added_to_hass(self) -> None:
-        """Register callbacks."""
-
-        # pylint: disable=unused-argument
         @callback
-        def sensor_state_listener(event: Event) -> None:  # noqa: ARG001
-            """Handle device state changes."""
+        def sensor_state_listener(event: Event) -> None:
             self.async_schedule_update_ha_state(force_refresh=True)
 
-        # pylint: disable=unused-argument
         @callback
-        def sensor_startup(event: Event) -> None:  # noqa: ARG001
-            """Update entity on startup."""
+        def sensor_startup(event: Event) -> None:
             async_track_state_change_event(
                 self.hass, self._setup_sources(), sensor_state_listener
             )
-
-            self.async_schedule_update_ha_state(
-                force_refresh=True
-            )  # Force first update
+            self.async_schedule_update_ha_state(force_refresh=True)
 
         self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, sensor_startup)
 
     @staticmethod
     def _has_state(state: str | None) -> bool:
-        """Return True if state has any value."""
         return state is not None and state not in [
             STATE_UNKNOWN,
             STATE_UNAVAILABLE,
@@ -235,7 +217,6 @@ class ApparentTemperatureSensor(SensorEntity):
         ]
 
     def _get_temperature(self, entity_id: str | None) -> float | None:
-        """Get temperature value (in °C) from entity."""
         if entity_id is None:
             return None
         state: State = self.hass.states.get(entity_id)
@@ -244,30 +225,27 @@ class ApparentTemperatureSensor(SensorEntity):
 
         domain = split_entity_id(state.entity_id)[0]
         if domain == WEATHER_DOMAIN:
-            temperature = state.attributes.get(ATTR_WEATHER_TEMPERATURE)
-            entity_unit = state.attributes.get(ATTR_WEATHER_TEMPERATURE_UNIT)
+            value = state.attributes.get(ATTR_WEATHER_TEMPERATURE)
+            unit = state.attributes.get(ATTR_WEATHER_TEMPERATURE_UNIT)
         elif domain == CLIMATE_DOMAIN:
-            temperature = state.attributes.get(ATTR_CURRENT_TEMPERATURE)
-            entity_unit = state.attributes.get(ATTR_WEATHER_TEMPERATURE_UNIT)
+            value = state.attributes.get(ATTR_CURRENT_TEMPERATURE)
+            unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
         else:
-            temperature = state.state
-            entity_unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            value = state.state
+            unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
 
-        if not self._has_state(temperature):
+        if not self._has_state(value):
             return None
 
         try:
-            temperature = TemperatureConverter.convert(
-                float(temperature), entity_unit, UnitOfTemperature.CELSIUS
+            return TemperatureConverter.convert(
+                float(value), unit, UnitOfTemperature.CELSIUS
             )
         except ValueError:
-            _LOGGER.exception('Could not convert value "%s" to float', state)
+            _LOGGER.exception("Temperature conversion failed for %s", state)
             return None
-
-        return float(temperature)
 
     def _get_humidity(self, entity_id: str | None) -> float | None:
-        """Get humidity value from entity."""
         if entity_id is None:
             return None
         state: State = self.hass.states.get(entity_id)
@@ -276,19 +254,18 @@ class ApparentTemperatureSensor(SensorEntity):
 
         domain = split_entity_id(state.entity_id)[0]
         if domain == WEATHER_DOMAIN:
-            humidity = state.attributes.get(ATTR_WEATHER_HUMIDITY)
+            value = state.attributes.get(ATTR_WEATHER_HUMIDITY)
         elif domain == CLIMATE_DOMAIN:
-            humidity = state.attributes.get(ATTR_CURRENT_HUMIDITY)
+            value = state.attributes.get(ATTR_CURRENT_HUMIDITY)
         else:
-            humidity = state.state
+            value = state.state
 
-        if not self._has_state(humidity):
+        if not self._has_state(value):
             return None
 
-        return float(humidity)
+        return float(value)
 
     def _get_wind_speed(self, entity_id: str | None) -> float | None:
-        """Get wind speed value from entity."""
         if entity_id is None:
             return 0.0
         state: State = self.hass.states.get(entity_id)
@@ -297,50 +274,39 @@ class ApparentTemperatureSensor(SensorEntity):
 
         domain = split_entity_id(state.entity_id)[0]
         if domain == WEATHER_DOMAIN:
-            wind_speed = state.attributes.get(ATTR_WEATHER_WIND_SPEED)
-            entity_unit = state.attributes.get(ATTR_WEATHER_WIND_SPEED_UNIT)
+            value = state.attributes.get(ATTR_WEATHER_WIND_SPEED)
+            unit = state.attributes.get(ATTR_WEATHER_WIND_SPEED_UNIT)
         else:
-            wind_speed = state.state
-            entity_unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            value = state.state
+            unit = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
 
-        if not self._has_state(wind_speed):
+        if not self._has_state(value):
             return None
 
         try:
-            wind_speed = SpeedConverter.convert(
-                float(wind_speed), entity_unit, UnitOfSpeed.METERS_PER_SECOND
+            return SpeedConverter.convert(
+                float(value), unit, UnitOfSpeed.METERS_PER_SECOND
             )
         except ValueError:
-            _LOGGER.exception('Could not convert value "%s" to float', state)
+            _LOGGER.exception("Wind speed conversion failed for %s", state)
             return None
 
-        return float(wind_speed)
-
     async def async_update(self) -> None:
-        """Update sensor state."""
-        self._temp_val = temp = self._get_temperature(self._temp)  # °C
-        self._humd_val = humd = self._get_humidity(self._humd)  # %
-        self._wind_val = wind = self._get_wind_speed(self._wind)  # m/s
+        self._temp_val = temp = self._get_temperature(self._temp)
+        self._humd_val = humd = self._get_humidity(self._humd)
+        self._wind_val = wind = self._get_wind_speed(self._wind)
 
         _LOGGER.debug("Temp: %s °C  Hum: %s %%  Wind: %s m/s", temp, humd, wind)
 
         if temp is None or humd is None:
-            _LOGGER.warning(
-                "Can't calculate sensor value: some sources are unavailable."
-            )
+            _LOGGER.warning("Can't calculate sensor value: missing temp/humidity")
             self._attr_native_value = None
             return
 
         if wind is None:
-            _LOGGER.warning(
-                "Can't get wind speed value. Wind speed will be ignored in calculation."
-            )
-            wind = 0
+            wind = 0.0
 
-        e_value = humd * 0.06105 * math.exp((17.27 * temp) / (237.7 + temp))
-        self._attr_native_value = temp + 0.348 * e_value - 0.7 * wind - 4.25
-        _LOGGER.debug(
-            "New sensor state is %s %s",
-            self._attr_native_value,
-            self._attr_native_unit_of_measurement,
-        )
+        e = humd * 0.06105 * math.exp((17.27 * temp) / (237.7 + temp))
+        self._attr_native_value = temp + 0.348 * e - 0.7 * wind - 4.25
+
+        _LOGGER.debug("New sensor state: %s °C", self._attr_native_value)
